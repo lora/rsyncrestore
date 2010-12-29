@@ -1,0 +1,580 @@
+#!/bin/bash
+
+##################################################################
+##
+## please read README file before doing anything else
+##
+## short info: GPL license, free script 
+## url: https://github.com/lora/rsyncrestore
+##
+##################################################################
+##
+## or just ignore everything and run the script ;-).
+##
+## do not modify the settings below in the script: 
+## -> run the script and a config file 'config' 
+## will be created in ~/.rsyncrestore. config file
+## can be used to modify everything you need.
+##
+##################################################################
+
+# test mode: YES or NO
+TEST_MODE="YES"
+
+# verbose mode: 0 (none) to 3 (all)
+VERBOSE_MODE=3
+
+# global (restore & backup) settings
+RSYNC_OPTS=(-v --progress)
+
+# restore settings 
+RESTORE_OPTS=(-rltpDO)
+
+# backup settings
+BACKUP_OPTS=(-rltpDO --delete)
+
+# single update settings
+SINGLE_UPDATE_OPTS=(-rltpDO)
+
+# disable deleting of local files when restoring/copying files from target server
+DISABLE_DELETING_FROM_RESTORE="NO"
+
+# applications settings folder
+LOCAL_SETTINGS_FOLDER=~/.rsyncrestore
+
+# config file
+LOCAL_SETTINGS_CONFIG="config"
+
+# local state file
+LOCAL_SETTINGS_STATE=".state"
+
+# state file
+INOTIFY_WATCHLOG=".inotifywatchlog"
+
+# nice run
+NICE_RUN="nice -n 19"
+
+
+get_user_config() {
+	if [[ ! -e ${LOCAL_SETTINGS_CONFIG} ]]; then
+		debug 1 "No config file found."
+		debug 1 "Saving new config file: ${LOCAL_SETTINGS_CONFIG}"
+
+        	cat <<RSYNCRESTORECONFIG >> ${LOCAL_SETTINGS_CONFIG}
+#####################################################
+##
+## rsyncrestore config file
+##
+#####################################################
+
+# which folder to sync. only one folder can be set at the moment
+# i.e.: /home
+SYNC_LOCAL_FOLDER=""
+
+# where to sync: folder path (i.e.: target folder on your server)
+SYNC_SERVER_FOLDER=""
+
+# remote sync ssh server data: username@host
+SYNC_SERVER_HOST=""
+
+# remote sync ssh server: additional ssh options (like: -i ~/.ssh/yourkey -p 22222)
+SYNC_SERVER_OPTS=""
+
+# file with a list of files (one per line) which will be excluded from syncing.
+# read rsync's man page for more info about patterns. i.e. */.mozilla/firefox/*/Cache
+EXCLUDE_FILE=""
+
+# delete localy excluded files from the server: YES or NO
+# warning: use this only if your are syncing only one computer with the server
+# or files excluded only on your computer will be deleted on the server and on other computers
+DELETE_EXCLUDED="NO"
+
+# disable deleting of local files when restoring/copying files from target server
+DISABLE_DELETING_FROM_RESTORE="NO"
+
+# limit syncing speed (in kB/s). 0 or blank value sets no limit
+# comment out this line to disable bandwidth speed limits 
+#BANDWIDTH=${BANDWIDTH}
+
+# max file size for backup. larger files will be ignored
+# define size like "10mb" or "50kb". see rsync's --max-size for details (man rsync)
+# comment out this line to disable file size check
+#MAX_FILE_SIZE="${MAX_FILE_SIZE}"
+
+
+
+#####################################################
+# no changes will be made to your files if TEST_MODE is YES
+#TEST_MODE="${TEST_MODE}"
+
+# verbose mode: 0 (none) to 3 (all)
+#VERBOSE_MODE=${VERBOSE_MODE}
+
+
+
+#####################################################
+# ADVANCED SETTINGS: rsync optons (check "man rsync")
+
+# global (restore & backup) settings: "man rsync" for more info
+#RSYNC_OPTS=(${RSYNC_OPTS[@]})
+
+# restore settings: "man rsync" for more info
+#RESTORE_OPTS=(${RESTORE_OPTS[@]})
+
+# backup settings: "man rsync" for more info
+#BACKUP_OPTS=(${BACKUP_OPTS[@]})
+
+# nice run rsync application
+#NICE_RUN="${NICE_RUN}"
+
+
+
+#####################################################
+# following files are relative paths and are saved in LOCAL_SETTINGS_FOLDER (see above)
+# you can also set absolute path (starting with /)
+
+# local state file
+#LOCAL_SETTINGS_STATE="${LOCAL_SETTINGS_STATE}"
+
+# state file
+#INOTIFY_WATCHLOG="${INOTIFY_WATCHLOG}"
+
+
+RSYNCRESTORECONFIG
+		. ${LOCAL_SETTINGS_CONFIG}
+
+		echo
+		echo "Created \"${LOCAL_SETTINGS_CONFIG}\"" 
+		echo
+	fi
+
+	if [[ -e ${LOCAL_SETTINGS_CONFIG} ]]; then
+		echo "Reading config file: ${LOCAL_SETTINGS_CONFIG}"
+		. ${LOCAL_SETTINGS_CONFIG}
+	fi
+}
+
+rsync_opt() {
+	RSYNC_OPTS[${#RSYNC_OPTS[*]}]="$*"
+}
+
+backup_opt() {
+	BACKUP_OPTS[${#BACKUP_OPTS[*]}]="$*"
+}
+
+restore_opt() {
+	RESTORE_OPTS[${#BACKUP_OPTS[*]}]="$*"
+}
+
+touch_target() {
+	$(${REMOTE_CMD} touch ${SYNC_SERVER_FOLDER})
+}
+
+touch_state() {
+	touch ${LOCAL_SETTINGS_STATE}
+}
+
+rsync_running() {
+	local status=$*
+
+	if [[ ! -z ${status} ]]; then
+		RSYNC_RUNNING=${status}
+	fi
+
+	if [[ ${RSYNC_RUNNING} == 0 ]]; then
+		return 1
+	fi
+	return 0
+}
+
+wait_for_rsync_to_finish() {
+	while rsync_running ; do
+		echo "Waiting for rsync to finish..."
+		sleep 5 
+	done
+}
+
+today() {
+	date +%F
+}
+
+remove_end_backslash() {
+	echo -n $* | sed -re 's/\/+$//g'
+}
+
+brsync() {
+	wait_for_rsync_to_finish
+
+	# return if nothing happens after 10 minutes
+	if ! wait_for_server 600 ; then
+		return 1
+	fi
+
+	local p=($*)
+	unset p[0]
+
+	rsync_running 1
+	if [[ $1 == 'new' ]]; then
+		sync_new
+
+	elif [[ $1 == 'backup' ]]; then
+		sync_backup
+
+	elif [[ $1 == 'restore' ]]; then
+		sync_restore 
+
+	elif [[ $1 == 'restore_delete' ]]; then
+		if [[ ${DISABLE_DELETING_FROM_RESTORE} == 'YES' ]]; then
+			sync_restore --delete
+		else
+			sync_restore
+		fi
+
+	elif [[ $1 == 'single' ]]; then
+		local opts=( ${p[@]} )
+		sync_single ${opts[@]}
+	fi
+
+	if [[ $1 != 'restore' ]]; then
+		touch_target
+	fi
+	touch_state
+	rsync_running 0 
+}
+
+sync_new() {
+	debug 1 "Finding and syncing updated files..."
+	debug 2 find "${SYNC_LOCAL_FOLDER}/" -cnewer ${LOCAL_SETTINGS_STATE} -printf "%P\\\\n" \| \
+		${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${SYNC_LOCAL_FOLDER}" "${SYNC_SERVER_TARGET}" 
+	find "${SYNC_LOCAL_FOLDER}/" -cnewer ${LOCAL_SETTINGS_STATE} -printf "%P\\n" | \
+		${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${SYNC_LOCAL_FOLDER}" "${SYNC_SERVER_TARGET}"
+}
+
+sync_restore() {
+	local opts=$*
+	debug 1 "Sync restore:"
+	debug 2 ${NICE_RUN} rsync ${RESTORE_OPTS[@]} "${RSYNC_OPTS[@]}" $opts "${SYNC_SERVER_TARGET}" "${SYNC_LOCAL_FOLDER}"
+	${NICE_RUN} rsync ${RESTORE_OPTS[@]} "${RSYNC_OPTS[@]}" $opts "${SYNC_SERVER_TARGET}" "${SYNC_LOCAL_FOLDER}"
+}
+
+sync_backup() {
+	local opts=$*
+	debug 1 "Sync backup:"
+	debug 2 ${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" $opts ${SYNC_LOCAL_FOLDER} "${SYNC_SERVER_TARGET}"
+	${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" $opts ${SYNC_LOCAL_FOLDER} "${SYNC_SERVER_TARGET}"
+}
+
+sync_single() {
+	local file=$*
+	if [[ -z $file ]]; then
+		file='.'
+	fi
+	debug 1 "Sync single: $file"
+	debug 2 echo $file \| ${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${SYNC_LOCAL_FOLDER}" "${SYNC_SERVER_TARGET}"
+	echo $file | ${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${SYNC_LOCAL_FOLDER}" "${SYNC_SERVER_TARGET}" 
+}
+
+get_subfolder() {
+	local folder=$*
+	local sub_folder=${folder##$SYNC_LOCAL_FOLDER}
+	echo -n ${sub_folder#/}
+}
+
+continuos_updates() {
+	while true; do
+		sleep 1800 
+		while rsync_running; do 
+			sleep 30
+		done
+		brsync new
+		brsync restore_delete
+	done
+}
+
+watch_changes() {
+	[[ -e ${INOTIFY_WATCHLOG} ]] || touch ${INOTIFY_WATCHLOG}
+
+	killall inotifywait
+	local separator=:$RANDOM:
+	inotifywait -d -r --format "%e$separator%w$separator%f" -e modify -e move -e create -e delete -e attrib -o "${INOTIFY_WATCHLOG}" "${SYNC_LOCAL_FOLDER}"
+
+	while inotifywait -e modify ${INOTIFY_WATCHLOG} >/dev/null 2>&1; do
+		local line1=$( tail -1 ${INOTIFY_WATCHLOG} )
+		local line2=$( tail -2 ${INOTIFY_WATCHLOG} | grep MOVED_FROM )
+
+		if echo $line1 | grep $separator >/dev/null ; then
+			# new day started
+			if [[ `basename ${SYNC_SERVER_TARGET}` != `today` ]]; then
+				set_up_environment
+				brsync restore_delete
+			fi
+
+			local file=${line1##*$separator}
+			local event=${line1%%$separator*}
+			event=${event%,*}
+			local middle=${line1%$separator*}
+			local folder=${middle#*$separator}
+			folder=${folder%/}
+
+			local subfolder=$( get_subfolder $folder )
+			debug 2 "FOUND: $event - $folder - $subfolder - $file"
+			
+			if [[ $event == 'DELETE' ]]; then
+				sync_single $subfolder
+
+			elif [[ ${event} == 'ATTRIB' ]] || [[ ${event} == 'CREATE' ]] || [[ ${event} == 'MODIFY' ]] || [[ ${event} == 'MOVED_TO' ]]; then
+				# delete old location (moved_from)
+				if [[ ${event} == 'MOVED_TO' ]] && [[ ! -z ${line2} ]]; then
+					local middle2=${line2%$separator*}
+					local folder2=${middle2#*$separator}
+					folder2=${folder2%/}
+
+					local subfolder2=$( get_subfolder $folder2 )
+					brsync single ${subfolder2}
+				fi
+
+				local nfile=${subfolder}
+				if [[ ! -z ${file} ]]; then
+					if [[ -z ${subfolder} ]]; then
+						nfile=${file}
+					else
+						nfile="${nfile}/${file}"
+					fi
+				fi
+				brsync single $nfile
+
+			else
+				warn "Unexpected inotifywait event: $event"
+			fi
+		fi	
+	done
+}
+
+server_ok() {
+	local server_error=$( ${REMOTE_CMD} ls -1 "${SYNC_SERVER_FOLDER}" 2>&1 1>/dev/null)
+
+	if [[ ! -z ${server_error} ]]; then
+		warn ${server_error}
+		return 1 
+	fi
+	return 0
+}
+
+wait_for_server() {
+	local max_seconds=$*
+	local sleep_interval=6
+	local sum_waiting=0
+
+	while ! server_ok ; do
+		sleep ${sleep_interval}
+		sum_waiting=$(( ${sum_waiting} + ${sleep_interval} ))
+		if [[ ! -z ${max_seconds} ]] && [[ ${sum_waiting} -ge ${max_seconds} ]]; then
+			return 1 
+		fi	
+	done
+	return 0 
+}
+
+set_up_environment() {
+	# do not continue if server target is not reachable:
+	# network or server is not available. just sit and wait
+	wait_for_server
+
+	# today's date is a always the name of a folder on the server
+	local today=$( today )
+
+	# get last backup folder name
+	local last_backup=$( ${REMOTE_CMD} ls -1 "${SYNC_SERVER_FOLDER}/" | grep -E '^[0-9][0-9][0-9][0-9]\-[0-9][0-9]\-[0-9][0-9]$' | tail -1 )
+
+	# new/current backup dir 
+	local curr_backup="${SYNC_SERVER_FOLDER}/${today}"
+
+	# it is a first backup? make a dir
+	if [[ -z ${last_backup} ]]; then
+		debug 1 "First run. Making first backup dir..."
+		$( ${REMOTE_CMD} mkdir ${curr_backup} )
+		FIRST_RUN=1
+
+	# not a first backup? hard link to the last one
+	elif [[ ${last_backup} != ${today} ]]; then
+		local last_old_backup="${SYNC_SERVER_FOLDER}/${last_backup}"
+		debug 1 "Last backup dir found. Making hard link (${last_old_backup} => ${curr_backup})..."
+		$( $REMOTE_CMD cp -rlp "${last_old_backup}" "${curr_backup}" )
+		debug 1 "Hard link made."
+	else
+		debug 1 "Found today's backup dir."
+		CURR_BACKUP="${SYNC_SERVER_FOLDER}/${last_backup}"
+	fi
+
+	# final settings
+	if [[ ! -z ${SYNC_SERVER_HOST} ]]; then
+       		SYNC_SERVER_TARGET="${SYNC_SERVER_HOST}:${curr_backup}/"
+	else
+       		SYNC_SERVER_TARGET="${curr_backup}/"
+	fi
+}
+
+debug() {
+	local params=($*)
+	if [[ ${VERBOSE_MODE} -ge ${params[0]} ]]; then
+		unset params[0]
+		local msg=( ${params[@]} )
+		echo ${msg[@]}
+	fi
+}
+
+warn() {
+	echo
+	echo $*
+	echo
+}
+
+error() {
+	warn $*
+	echo "This is critical error. Stopping..."
+	exit 1
+}
+
+
+# make users configuration folder
+if [[ -z ${LOCAL_SETTINGS_FOLDER} ]]; then
+	error "LOCAL_SETTINGS_FOLDER not set"
+fi
+if [[ ! -e ${LOCAL_SETTINGS_FOLDER} ]]; then
+	mkdir -p ${LOCAL_SETTINGS_FOLDER} || exit 1
+fi
+
+# config file 
+if [[ -z ${LOCAL_SETTINGS_CONFIG} ]]; then
+	error "LOCAL_SETTINGS_CONFIG does not exist or is not defined."
+fi
+if [[ ${LOCAL_SETTINGS_CONFIG:0:1} != '/' ]]; then
+	LOCAL_SETTINGS_CONFIG="${LOCAL_SETTINGS_FOLDER}/${LOCAL_SETTINGS_CONFIG}"
+fi
+
+# get settings from $HOME
+get_user_config
+
+# local state file
+if [[ ${LOCAL_SETTINGS_STATE:0:1} != '/' ]]; then
+	LOCAL_SETTINGS_STATE="${LOCAL_SETTINGS_FOLDER}/${LOCAL_SETTINGS_STATE}"
+fi
+
+# inotify watchlog file
+if [[ ${INOTIFY_WATCHLOG:0:1} != '/' ]]; then
+	INOTIFY_WATCHLOG="${LOCAL_SETTINGS_FOLDER}/${INOTIFY_WATCHLOG}"
+fi
+
+sync_local_folder_prepare() {
+	local folders=( $* )
+	local checked=()
+
+	local folder_count=${#SYNC_LOCAL_FOLDER[@]}
+	local index=0
+
+	while [ ${index} -le ${folder_count} ]; do
+		local folder=${folders[${index}]}
+		if [[ ! -r ${folder} ]]; then
+			error "${folder} in SYNC_LOCAL_FOLDER is not defined/readable/existing. Check your config file."
+		fi
+		checked[${#checked[*]}]=$( remove_end_backslash ${folder} )
+		((index++))
+	done
+
+	echo -n ${checked[@]}
+}
+
+# local folder for syncing
+SYNC_LOCAL_FOLDER=$( sync_local_folder_prepare ${SYNC_LOCAL_FOLDER[@]} )
+if [[ -z ${SYNC_LOCAL_FOLDER} ]]; then
+	error "SYNC_LOCAL_FOLDER is not defined. Check your config file."
+fi
+
+
+# remote target folder
+SYNC_SERVER_FOLDER=$( remove_end_backslash ${SYNC_SERVER_FOLDER} )
+if [[ -z ${SYNC_SERVER_FOLDER} ]] || [[ ! -e ${SYNC_SERVER_FOLDER} ]]; then
+	error "SYNC_SERVER_FOLDER not defined. Check your config file."
+fi
+
+# exclude file
+EXCLUDE_FILE=$( remove_end_backslash ${EXCLUDE_FILE} )
+if [[ ! -z ${EXCLUDE_FILE} ]]; then
+	if [[ ${EXCLUDE_FILE:0:1} != '/' ]]; then
+		EXCLUDE_FILE="${LOCAL_SETTINGS_FOLDER}/${EXCLUDE_FILE}"
+	fi
+	if [[ ! -r ${EXCLUDE_FILE} ]]; then
+		error "EXCLUDE_FILE defined but this file is not existing/readable. Check your config file."
+
+	else
+		if [[ ${DELETE_EXCLUDED} == 'YES' ]]; then
+			backup_opt "--delete-excluded"
+		fi
+		backup_opt "--exclude-from='${EXCLUDE_FILE}'"
+	fi
+fi
+
+# bandwidth
+if [[ ! -z ${BANDWIDTH} ]]; then
+	rsync_opt "--bwlimit=${BANDWIDTH}"
+fi
+
+# max-size
+if [[ ! -z ${MAX_FILE_SIZE} ]]; then
+	rsync_opt "--max-size=${MAX_FILE_SIZE}"
+fi
+
+# remote server, not local target dir
+if [ ! -z ${SYNC_SERVER_HOST} ]; then
+	REMOTE_CMD="ssh ${SYNC_SERVER_OPTS} ${SYNC_SERVER_HOST}"
+	if [[ -z ${SYNC_SERVER_OPTS} ]]; then
+		rsync_opt "-e ssh"
+	else
+		rsync_opt "-e ssh ${SYNC_SERVER_OPTS}"
+	fi
+fi
+
+# test mode?
+if [[ ${TEST_MODE} == 'YES' ]]; then
+	warn "Running rsync in dry-run mode. No changes will be made to your files."
+	rsync_opt "--dry-run"
+fi
+
+# set rsync status
+rsync_running 0
+
+#####################################################
+# set up everything and start
+set_up_environment
+
+# let's go
+debug 1 "Starting ("`date`")"
+
+# update new?
+if [[ -e ${LOCAL_SETTINGS_STATE} ]]; then
+	brsync new
+fi
+
+# first run: restore everything from the server
+if [[ ${FIRST_RUN} == 1 ]]; then
+	brsync restore
+
+# restore from the server but delete unneeded stuff
+else
+	brsync restore_delete
+fi
+
+# sync back one more time for luck
+brsync backup
+
+# run updates every hour
+continuos_updates &
+
+# watch local folders for changes using inotifywait
+if [[ -x `which inotifywait 2>/dev/null` ]]; then
+	watch_changes
+else
+	warn "inotifywait is not available. Live-watching folders is not available.\
+       		Install inotify-tools if you want to use live updates."
+fi
+
