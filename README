@@ -1,0 +1,112 @@
+rsyncrestore
+
+Shell (bash) script which uses rsync and inotify-tools for making simple,
+flexible and effective multiuser file synchronizing tool.
+
+License: GPL, http://www.gnu.org/licenses/gpl.html
+
+URL:  https://github.com/lora/rsyncrestore
+
+
+1. Introduction
+2. Requirements
+3. Installation
+4. Usage
+
+
+1. Introduction
+
+rsyncrestore is basicly synchronizing your folder(s) with an another
+folder. This folder can be a local folder on your computer (i.e. external
+USB hard disk) or a folder on a remote server (with running SSH server).
+
+Idea for writing rsyncrestore came from the wish to use Dropbox securely.
+But do you really want to share your private data with some unknown
+servers, clouds? I did not want to do that and I used Christmas break to
+solve this problem with rsync and inotify-tools.
+
+Target folders on the server will contain separate backup folders for 
+every single day. These folders are incremental copies of folders on your
+computer and are hard links of the day before. Folder structure looks 
+like this:
+
+SERVER-FOLDER/
+	2010-12-20/
+	2010-12-21/
+	2010-12-23/
+	2010-12-27/
+
+
+2. Requirements
+
+rsyncrestore depends on rsync and inotify-tools. Everthing else should be
+part of every Linux distribution. Cygwin should also work but I did not
+test it.
+
+Use apt-get to install rsync and inotify-tools on Ubuntu and other distros:
+# sudo apt-get install rsync inotify-tools
+
+Other distros have similar tools. If not you can download rsync from
+http://samba.anu.edu.au/rsync/ and inotify-tools from sourceforge 
+http://inotify-tools.sourceforge.net/ and compile it by yourself.
+
+
+
+3. Installation
+
+a) Download rsyncrestore from https://github.com/lora/rsyncrestore
+b) Save rsyncrestore file. Put it in /usr/bin to make it accessible for
+   all users
+b) Make it executable: chmod +x rsyncrestore
+c) Run it: ./rsyncrestore
+
+
+
+4. Usage
+
+When you run rsyncrestore first time "config" file will be created in
+~/.rsyncrestore/ folder. You will have to set some basic settings in
+this file before you using rsyncrestore:
+
+a) SYNC_LOCAL_FOLDER
+Your folder which you want to sync. Only one local folder can be set at 
+the moment. 
+
+Example:
+SYNC_LOCAL_FOLDER="/home"
+
+
+b) SYNC_SERVER_FOLDER
+Your target folder (on the server) where your files will be saved. Only
+one target folder can be set.
+
+Example:
+SYNC_SERVER_FOLDER="/mnt/sync-backup"
+
+
+c) SYNC_SERVER_HOST
+username@hostname of your server. Copy your ssh key to your server to
+allow automatic passwordless login for rsync. Here is a link to a howto
+for copying ssh key: https://encrypted.google.com/search?q=ssh+key+passwordless
+
+Example:
+SYNC_SERVER_HOST="your_username@your-server.com"
+
+
+d) TEST_MODE
+ 
+TEST_MODE is by default set to YES just to be able to test everything.
+No data will be changed if TEST_MODE is set ot YES.  You will have to 
+set it to "NO" to use rsyncrestore.
+
+Example:
+TEST_MODE="NO"
+
+
+
+e) Other options
+
+All other options are explained directly in config file. 
+
+
+
