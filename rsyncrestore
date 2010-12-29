@@ -414,6 +414,25 @@ set_up_environment() {
 	fi
 }
 
+sync_local_folder_prepare() {
+	local folders=( $* )
+	local checked=()
+
+	local folder_count=${#SYNC_LOCAL_FOLDER[@]}
+	local index=0
+
+	while [ ${index} -le ${folder_count} ]; do
+		local folder=${folders[${index}]}
+		if [[ ! -r ${folder} ]]; then
+			error "${folder} in SYNC_LOCAL_FOLDER is not defined/readable/existing. Check your config file."
+		fi
+		checked[${#checked[*]}]=$( remove_end_backslash ${folder} )
+		((index++))
+	done
+
+	echo -n ${checked[@]}
+}
+
 debug() {
 	local params=($*)
 	if [[ ${VERBOSE_MODE} -ge ${params[0]} ]]; then
@@ -465,24 +484,6 @@ if [[ ${INOTIFY_WATCHLOG:0:1} != '/' ]]; then
 	INOTIFY_WATCHLOG="${LOCAL_SETTINGS_FOLDER}/${INOTIFY_WATCHLOG}"
 fi
 
-sync_local_folder_prepare() {
-	local folders=( $* )
-	local checked=()
-
-	local folder_count=${#SYNC_LOCAL_FOLDER[@]}
-	local index=0
-
-	while [ ${index} -le ${folder_count} ]; do
-		local folder=${folders[${index}]}
-		if [[ ! -r ${folder} ]]; then
-			error "${folder} in SYNC_LOCAL_FOLDER is not defined/readable/existing. Check your config file."
-		fi
-		checked[${#checked[*]}]=$( remove_end_backslash ${folder} )
-		((index++))
-	done
-
-	echo -n ${checked[@]}
-}
 
 # local folder for syncing
 SYNC_LOCAL_FOLDER=$( sync_local_folder_prepare ${SYNC_LOCAL_FOLDER[@]} )
