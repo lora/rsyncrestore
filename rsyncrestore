@@ -39,6 +39,9 @@ SINGLE_UPDATE_OPTS=(-rltpDO)
 # disable deleting of local files when restoring/copying files from target server
 DISABLE_DELETING_FROM_RESTORE="NO"
 
+# how often to check for updates on the server. value is in seconds
+RESTORE_INTERVAL=900
+
 # applications settings folder
 LOCAL_SETTINGS_FOLDER=~/.rsyncrestore
 
@@ -91,6 +94,9 @@ DELETE_EXCLUDED="NO"
 
 # disable deleting of local files when restoring/copying files from target server
 DISABLE_DELETING_FROM_RESTORE="NO"
+
+# how often (in seconds) to check for updates on the server
+RESTORE_INTERVAL=${RESTORE_INTERVAL}
 
 # limit syncing speed (in kB/s). 0 or blank value sets no limit
 # comment out this line to disable bandwidth speed limits 
@@ -282,7 +288,7 @@ get_subfolder() {
 
 continuos_updates() {
 	while true; do
-		sleep 1800 
+		sleep ${RESTORE_INTERVAL} 
 		while rsync_running; do 
 			sleep 30
 		done
