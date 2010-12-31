@@ -27,13 +27,13 @@ VERBOSE_MODE=3
 # global (restore & backup) settings
 RSYNC_OPTS=(-v --progress)
 
-# restore settings 
+# general restore settings 
 RESTORE_OPTS=(-rltpDO)
 
-# backup settings
+# general backup settings
 BACKUP_OPTS=(-rltpDO --delete)
 
-# single update settings
+# single file update settings
 SINGLE_UPDATE_OPTS=(-rltpDO)
 
 # disable deleting of local files when restoring/copying files from target server
@@ -93,7 +93,7 @@ EXCLUDE_FILE=""
 DELETE_EXCLUDED="NO"
 
 # disable deleting of local files when restoring/copying files from target server
-DISABLE_DELETING_FROM_RESTORE="NO"
+DISABLE_DELETING_FROM_RESTORE="${DISABLE_DELETING_FROM_RESTORE}"
 
 # how often (in seconds) to check for updates on the server
 RESTORE_INTERVAL=${RESTORE_INTERVAL}
@@ -119,7 +119,8 @@ RESTORE_INTERVAL=${RESTORE_INTERVAL}
 
 
 #####################################################
-# ADVANCED SETTINGS: rsync optons (check "man rsync")
+# ADVANCED SETTINGS: rsync optons (see "man rsync" for more info)
+# do not change if you do not know what these options do
 
 # global (restore & backup) settings: "man rsync" for more info
 #RSYNC_OPTS=(${RSYNC_OPTS[@]})
@@ -130,7 +131,10 @@ RESTORE_INTERVAL=${RESTORE_INTERVAL}
 # backup settings: "man rsync" for more info
 #BACKUP_OPTS=(${BACKUP_OPTS[@]})
 
-# nice run rsync application
+# single file update settings
+SINGLE_UPDATE_OPTS=(${SINGLE_UPDATE_OPTS[@]})
+
+# nice run rsync application (see "man nice" for more info)
 #NICE_RUN="${NICE_RUN}"
 
 
@@ -142,7 +146,7 @@ RESTORE_INTERVAL=${RESTORE_INTERVAL}
 # local state file
 #LOCAL_SETTINGS_STATE="${LOCAL_SETTINGS_STATE}"
 
-# state file
+# inotify log file
 #INOTIFY_WATCHLOG="${INOTIFY_WATCHLOG}"
 
 
@@ -155,7 +159,7 @@ RSYNCRESTORECONFIG
 	fi
 
 	if [[ -e ${LOCAL_SETTINGS_CONFIG} ]]; then
-		echo "Reading config file: ${LOCAL_SETTINGS_CONFIG}"
+		debug 1 "Reading config file: ${LOCAL_SETTINGS_CONFIG}"
 		. ${LOCAL_SETTINGS_CONFIG}
 	fi
 }
@@ -173,13 +177,14 @@ restore_opt() {
 }
 
 touch_target() {
-	$(${REMOTE_CMD} touch ${SYNC_SERVER_FOLDER})
+	$( ${REMOTE_CMD} touch ${SYNC_SERVER_FOLDER} )
 }
 
 touch_state() {
 	touch ${LOCAL_SETTINGS_STATE}
 }
 
+#  is rsync running?
 rsync_running() {
 	local status=$*
 
@@ -193,17 +198,21 @@ rsync_running() {
 	return 0
 }
 
+# waits for rsync to finish and checks 
+# every X seconds whether it is running
 wait_for_rsync_to_finish() {
 	while rsync_running ; do
-		echo "Waiting for rsync to finish..."
+		debug 1 "Waiting for rsync to finish..."
 		sleep 5 
 	done
 }
 
+# return today's date in format: YYYY-MM-DD
 today() {
 	date +%F
 }
 
+# remove (multiple) backslashes from end of the string
 remove_end_backslash() {
 	echo -n $* | sed -re 's/\/+$//g'
 }
@@ -248,6 +257,8 @@ brsync() {
 	rsync_running 0 
 }
 
+# find new or changed files in SYNC_LOCAL_FOLDER
+# and sync (copy) them with the server
 sync_new() {
 	debug 1 "Finding and syncing updated files..."
 	debug 2 find "${SYNC_LOCAL_FOLDER}/" -cnewer ${LOCAL_SETTINGS_STATE} -printf "%P\\\\n" \| \
@@ -256,6 +267,8 @@ sync_new() {
 		${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${SYNC_LOCAL_FOLDER}" "${SYNC_SERVER_TARGET}"
 }
 
+# sync server with SYNC_LOCAL_FOLDER 
+# (from server to local folder => restoring)
 sync_restore() {
 	local opts=$*
 	debug 1 "Sync restore:"
@@ -263,6 +276,7 @@ sync_restore() {
 	${NICE_RUN} rsync ${RESTORE_OPTS[@]} "${RSYNC_OPTS[@]}" $opts "${SYNC_SERVER_TARGET}" "${SYNC_LOCAL_FOLDER}"
 }
 
+# sync SYNC_LOCAL_FOLDER with the server
 sync_backup() {
 	local opts=$*
 	debug 1 "Sync backup:"
@@ -270,6 +284,9 @@ sync_backup() {
 	${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" $opts ${SYNC_LOCAL_FOLDER} "${SYNC_SERVER_TARGET}"
 }
 
+# send single file changes to server
+# file is a path relative to SYNC_LOCAL_FOLDER
+# example: sync_single this/is/my/file
 sync_single() {
 	local file=$*
 	if [[ -z $file ]]; then
@@ -280,12 +297,16 @@ sync_single() {
 	echo $file | ${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${SYNC_LOCAL_FOLDER}" "${SYNC_SERVER_TARGET}" 
 }
 
+# remove SYNC_LOCAL_FOLDER from the path
+# the get a path relative to SYNC_LOCAL_FOLDER
 get_subfolder() {
 	local folder=$*
 	local sub_folder=${folder##$SYNC_LOCAL_FOLDER}
 	echo -n ${sub_folder#/}
 }
 
+# checks server for updates (changes) 
+# every RESTORE_INTERVAL seconds
 continuos_updates() {
 	while true; do
 		sleep ${RESTORE_INTERVAL} 
@@ -297,6 +318,8 @@ continuos_updates() {
 	done
 }
 
+# it watches local folder(s) for changes and runs sync_single
+# if a file/folder is created/changed/deleted/moved...
 watch_changes() {
 	[[ -e ${INOTIFY_WATCHLOG} ]] || touch ${INOTIFY_WATCHLOG}
 
@@ -356,6 +379,7 @@ watch_changes() {
 	done
 }
 
+# checks whether target folder (and server) is reachable
 server_ok() {
 	local server_error=$( ${REMOTE_CMD} ls -1 "${SYNC_SERVER_FOLDER}" 2>&1 1>/dev/null)
 
@@ -366,6 +390,8 @@ server_ok() {
 	return 0
 }
 
+# this function runs server_ok return postive answer
+# it can ran forever or until max_seconds (param1) passed
 wait_for_server() {
 	local max_seconds=$*
 	local sleep_interval=6
@@ -420,6 +446,7 @@ set_up_environment() {
 	fi
 }
 
+# check SYNC_LOCAL_FOLDER for syntax errors, folder existance etc
 sync_local_folder_prepare() {
 	local folders=( $* )
 	local checked=()
@@ -429,6 +456,9 @@ sync_local_folder_prepare() {
 
 	while [ ${index} -le ${folder_count} ]; do
 		local folder=${folders[${index}]}
+		if [[ ${folder:0:1} != '/' ]]; then
+			error "${folder} in SYNC_LOCAL_FOLDER is not absolute path. Use only absolute paths (beginning with /)."
+		fi
 		if [[ ! -r ${folder} ]]; then
 			error "${folder} in SYNC_LOCAL_FOLDER is not defined/readable/existing. Check your config file."
 		fi
@@ -574,7 +604,7 @@ fi
 # sync back one more time for luck
 brsync backup
 
-# run updates every hour
+# run updates from server every X seconds
 continuos_updates &
 
 # watch local folders for changes using inotifywait
