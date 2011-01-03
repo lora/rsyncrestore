@@ -177,11 +177,15 @@ restore_opt() {
 }
 
 touch_target() {
-	$( ${REMOTE_CMD} touch ${SYNC_SERVER_FOLDER} )
+	if [[ ${TEST_MODE} != 'YES' ]]; then
+		$( ${REMOTE_CMD} touch ${SYNC_SERVER_FOLDER} )
+	fi
 }
 
 touch_state() {
-	touch ${LOCAL_SETTINGS_STATE}
+	if [[ ${TEST_MODE} != 'YES' ]]; then
+		touch ${LOCAL_SETTINGS_STATE}
+	fi
 }
 
 #  is rsync running?
@@ -261,10 +265,14 @@ brsync() {
 # and sync (copy) them with the server
 sync_new() {
 	debug 1 "Finding and syncing updated files..."
-	debug 2 find "${SYNC_LOCAL_FOLDER}/" -cnewer ${LOCAL_SETTINGS_STATE} -printf "%P\\\\n" \| \
-		${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${SYNC_LOCAL_FOLDER}" "${SYNC_SERVER_TARGET}" 
-	find "${SYNC_LOCAL_FOLDER}/" -cnewer ${LOCAL_SETTINGS_STATE} -printf "%P\\n" | \
-		${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${SYNC_LOCAL_FOLDER}" "${SYNC_SERVER_TARGET}"
+	local sync_local_folder=( ${SYNC_LOCAL_FOLDER[@]} )
+	for ((i=0; i<${#sync_local_folder[@]}; i++)); do
+		local folder=${sync_local_folder[$i]}
+		debug 2 find "${folder}" -cnewer ${LOCAL_SETTINGS_STATE} -printf "%P\\\\n" \| \
+			${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${folder}" "${SYNC_SERVER_TARGET}" 
+		find "${folder}" -cnewer ${LOCAL_SETTINGS_STATE} -printf "%P\\n" | \
+			${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${folder}" "${SYNC_SERVER_TARGET}"
+	done
 }
 
 # sync server with SYNC_LOCAL_FOLDER 
@@ -272,8 +280,16 @@ sync_new() {
 sync_restore() {
 	local opts=$*
 	debug 1 "Sync restore:"
-	debug 2 ${NICE_RUN} rsync ${RESTORE_OPTS[@]} "${RSYNC_OPTS[@]}" $opts "${SYNC_SERVER_TARGET}" "${SYNC_LOCAL_FOLDER}"
-	${NICE_RUN} rsync ${RESTORE_OPTS[@]} "${RSYNC_OPTS[@]}" $opts "${SYNC_SERVER_TARGET}" "${SYNC_LOCAL_FOLDER}"
+	local sync_local_folder=( ${SYNC_LOCAL_FOLDER[@]} )
+	for ((i=0; i<${#sync_local_folder[@]}; i++)); do
+		local folder=${sync_local_folder[$i]}
+		local target_folder=$( basename ${sync_local_folder[$i]} )
+		if [[ -d ${folder} ]]; then
+			target_folder="${target_folder}/"
+		fi
+		debug 2 ${NICE_RUN} rsync ${RESTORE_OPTS[@]} "${RSYNC_OPTS[@]}" $opts "${SYNC_SERVER_TARGET}${target_folder}" "${folder}"
+		${NICE_RUN} rsync ${RESTORE_OPTS[@]} "${RSYNC_OPTS[@]}" $opts "${SYNC_SERVER_TARGET}${target_folder}" "${folder}"
+	done
 }
 
 # sync SYNC_LOCAL_FOLDER with the server
@@ -288,21 +304,41 @@ sync_backup() {
 # file is a path relative to SYNC_LOCAL_FOLDER
 # example: sync_single this/is/my/file
 sync_single() {
-	local file=$*
-	if [[ -z $file ]]; then
-		file='.'
+	debug 1 "Sync single: $*"
+	local paths=( $( split_sync_path $* ) )
+	local folder=${paths[0]}
+	local file=${paths[1]}
+	local remote_folder=$( basename ${folder} )
+	debug 1 "Single split: $file IN $folder"
+
+	if [[ -z ${file} ]]; then
+		return 1
 	fi
-	debug 1 "Sync single: $file"
-	debug 2 echo $file \| ${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${SYNC_LOCAL_FOLDER}" "${SYNC_SERVER_TARGET}"
-	echo $file | ${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${SYNC_LOCAL_FOLDER}" "${SYNC_SERVER_TARGET}" 
+
+	debug 2 echo $file \| ${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${folder}" "${SYNC_SERVER_TARGET}${remote_folder}"
+	echo ${file} | ${NICE_RUN} rsync ${BACKUP_OPTS[@]} "${RSYNC_OPTS[@]}" -R --files-from=- "${folder}" "${SYNC_SERVER_TARGET}${remote_folder}" 
 }
 
-# remove SYNC_LOCAL_FOLDER from the path
-# the get a path relative to SYNC_LOCAL_FOLDER
-get_subfolder() {
-	local folder=$*
-	local sub_folder=${folder##$SYNC_LOCAL_FOLDER}
-	echo -n ${sub_folder#/}
+# splits absolute path in SYNC_LOCAL_FOLDER and relative rest path
+# i.e. /your/sync/folder/file => /your/sync/folder & file
+split_sync_path() {
+	local path=$*
+
+	local rpath=""
+	local sync_local_folder=( ${SYNC_LOCAL_FOLDER[@]} )
+	for ((i=0; i<${#sync_local_folder[@]}; i++)); do
+		local folder=${sync_local_folder[$i]}
+		local npath=${path##$folder}
+
+		if [[ ${folder} != ${npath} ]]; then
+			rpath=${npath#/}
+			if [[ -z ${rpath} ]]; then
+				rpath='.'
+			fi
+			echo "${folder}" "${rpath}"
+			break
+		fi
+	done
 }
 
 # checks server for updates (changes) 
@@ -325,7 +361,7 @@ watch_changes() {
 
 	killall inotifywait
 	local separator=:$RANDOM:
-	inotifywait -d -r --format "%e$separator%w$separator%f" -e modify -e move -e create -e delete -e attrib -o "${INOTIFY_WATCHLOG}" "${SYNC_LOCAL_FOLDER}"
+	inotifywait -d -r --format "%e$separator%w%f" -e modify -e move -e create -e delete -e attrib -o "${INOTIFY_WATCHLOG}" ${SYNC_LOCAL_FOLDER}
 
 	while inotifywait -e modify ${INOTIFY_WATCHLOG} >/dev/null 2>&1; do
 		local line1=$( tail -1 ${INOTIFY_WATCHLOG} )
@@ -341,36 +377,27 @@ watch_changes() {
 			local file=${line1##*$separator}
 			local event=${line1%%$separator*}
 			event=${event%,*}
-			local middle=${line1%$separator*}
-			local folder=${middle#*$separator}
-			folder=${folder%/}
-
-			local subfolder=$( get_subfolder $folder )
-			debug 2 "FOUND: $event - $folder - $subfolder - $file"
+			debug 2 "FOUND: $event - $file"
 			
 			if [[ $event == 'DELETE' ]]; then
-				sync_single $subfolder
+				file=$( remove_end_backslash ${file} )
+				file=${file%/*}
+				brsync single ${file} 
 
 			elif [[ ${event} == 'ATTRIB' ]] || [[ ${event} == 'CREATE' ]] || [[ ${event} == 'MODIFY' ]] || [[ ${event} == 'MOVED_TO' ]]; then
 				# delete old location (moved_from)
 				if [[ ${event} == 'MOVED_TO' ]] && [[ ! -z ${line2} ]]; then
-					local middle2=${line2%$separator*}
-					local folder2=${middle2#*$separator}
-					folder2=${folder2%/}
+					debug 2 "FOUND: MOVED_FROM - $file2"
 
-					local subfolder2=$( get_subfolder $folder2 )
-					brsync single ${subfolder2}
+					local file2=${line2##*$separator}
+					file2=$( remove_end_backslash ${file} )
+					file2=${file%/*}
+					brsync single ${file2}
 				fi
 
-				local nfile=${subfolder}
-				if [[ ! -z ${file} ]]; then
-					if [[ -z ${subfolder} ]]; then
-						nfile=${file}
-					else
-						nfile="${nfile}/${file}"
-					fi
+				if [[ -z ${file2} ]] || [[ ${file} != ${file2} ]]; then
+					brsync single $file
 				fi
-				brsync single $nfile
 
 			else
 				warn "Unexpected inotifywait event: $event"
@@ -424,18 +451,21 @@ set_up_environment() {
 	# it is a first backup? make a dir
 	if [[ -z ${last_backup} ]]; then
 		debug 1 "First run. Making first backup dir..."
-		$( ${REMOTE_CMD} mkdir ${curr_backup} )
+		if [[ ${TEST_MODE} != 'YES' ]]; then
+			$( ${REMOTE_CMD} mkdir ${curr_backup} )
+		fi
 		FIRST_RUN=1
 
 	# not a first backup? hard link to the last one
 	elif [[ ${last_backup} != ${today} ]]; then
 		local last_old_backup="${SYNC_SERVER_FOLDER}/${last_backup}"
 		debug 1 "Last backup dir found. Making hard link (${last_old_backup} => ${curr_backup})..."
-		$( $REMOTE_CMD cp -rlp "${last_old_backup}" "${curr_backup}" )
+		if [[ ${TEST_MODE} != 'YES' ]]; then
+			$( $REMOTE_CMD cp -rlp "${last_old_backup}" "${curr_backup}" )
+		fi
 		debug 1 "Hard link made."
 	else
 		debug 1 "Found today's backup dir."
-		CURR_BACKUP="${SYNC_SERVER_FOLDER}/${last_backup}"
 	fi
 
 	# final settings
@@ -457,11 +487,12 @@ sync_local_folder_prepare() {
 	while [ ${index} -le ${folder_count} ]; do
 		local folder=${folders[${index}]}
 		if [[ ${folder:0:1} != '/' ]]; then
-			error "${folder} in SYNC_LOCAL_FOLDER is not absolute path. Use only absolute paths (beginning with /)."
+			error "${folder} in SYNC_LOCAL_FOLDER is not the absolute path. Use only absolute paths (beginning with /)."
 		fi
 		if [[ ! -r ${folder} ]]; then
 			error "${folder} in SYNC_LOCAL_FOLDER is not defined/readable/existing. Check your config file."
 		fi
+
 		checked[${#checked[*]}]=$( remove_end_backslash ${folder} )
 		((index++))
 	done
