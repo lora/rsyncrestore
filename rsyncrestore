@@ -223,7 +223,6 @@ remove_end_backslash() {
 brsync() {
 	wait_for_rsync_to_finish
 
-	# return if nothing happens after 10 minutes
 	if ! wait_for_server 600 ; then
 		return 1
 	fi
@@ -258,10 +257,6 @@ brsync() {
 	fi
 	touch_state
 	rsync_running 0
-
-	echo END RUNNING: ${RSYNC_RUNNING}
-	echo
-	echo '---------------------------'
 }
 
 # find new or changed files in SYNC_LOCAL_FOLDER
