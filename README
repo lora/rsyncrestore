@@ -69,11 +69,10 @@ When you run rsyncrestore first time "config" file will be created in
 this file before you using rsyncrestore:
 
 a) SYNC_LOCAL_FOLDER
-Your folder which you want to sync. Only one local folder can be set at 
-the moment. 
+Your folders which you want to sync. Split multiple folders with space. 
 
 Example:
-SYNC_LOCAL_FOLDER="/home"
+SYNC_LOCAL_FOLDER="/home /etc /mnt/your\ folder"
 
 
 b) SYNC_SERVER_FOLDER

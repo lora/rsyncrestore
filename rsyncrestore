@@ -18,8 +18,6 @@
 ##
 ##################################################################
 
-set -m
-
 # test mode: YES or NO
 TEST_MODE="YES"
 
@@ -69,11 +67,12 @@ get_user_config() {
 ##
 #####################################################
 
-# which folder to sync. only one folder can be set at the moment
-# i.e.: /home
+# which folder to sync. split multiple folder with space
+# i.e.: /home /etc /mnt/your\ folder
 SYNC_LOCAL_FOLDER=""
 
 # where to sync: folder path (i.e.: target folder on your server)
+# i.e. /mnt/backup
 SYNC_SERVER_FOLDER=""
 
 # remote sync ssh server data: username@host
@@ -84,18 +83,21 @@ SYNC_SERVER_OPTS=""
 
 # file with a list of files (one per line) which will be excluded from syncing.
 # read rsync's man page for more info about patterns. i.e. */.mozilla/firefox/*/Cache
-EXCLUDE_FILE=""
+#EXCLUDE_FILE=""
 
-# delete localy excluded files from the server: YES or NO
+# delete already synced but after that localy excluded files from the server: YES or NO
 # warning: use this only if your are syncing only one computer with the server
-# or files excluded only on your computer will be deleted on the server and on other computers
-DELETE_EXCLUDED="NO"
+# or files excluded only on your computer will be deleted on the server and on all other computers
+# default value if nothing set: NO
+#DELETE_EXCLUDED="NO"
 
 # disable deleting of local files when restoring/copying files from target server
-DISABLE_DELETING_FROM_RESTORE="${DISABLE_DELETING_FROM_RESTORE}"
+# default value if nothing set: ${DISABLE_DELETING_FROM_RESTORE}
+#DISABLE_DELETING_FROM_RESTORE="${DISABLE_DELETING_FROM_RESTORE}"
 
 # how often (in seconds) to check for updates on the server
-RESTORE_INTERVAL=${RESTORE_INTERVAL}
+# default value if nothing set: ${RESTORE_INTERVAL}
+#RESTORE_INTERVAL=${RESTORE_INTERVAL}
 
 # limit syncing speed (in kB/s). 0 or blank value sets no limit
 # comment out this line to disable bandwidth speed limits 
@@ -131,7 +133,7 @@ RESTORE_INTERVAL=${RESTORE_INTERVAL}
 #BACKUP_OPTS=(${BACKUP_OPTS[@]})
 
 # single file update settings
-SINGLE_UPDATE_OPTS=(${SINGLE_UPDATE_OPTS[@]})
+#SINGLE_UPDATE_OPTS=(${SINGLE_UPDATE_OPTS[@]})
 
 # nice run rsync application (see "man nice" for more info)
 #NICE_RUN="${NICE_RUN}"
