@@ -18,6 +18,8 @@
 ##
 ##################################################################
 
+set -m
+
 # test mode: YES or NO
 TEST_MODE="YES"
 
@@ -50,9 +52,6 @@ LOCAL_SETTINGS_CONFIG="config"
 
 # local state file
 LOCAL_SETTINGS_STATE=".state"
-
-# state file
-INOTIFY_WATCHLOG=".inotifywatchlog"
 
 # nice run
 NICE_RUN="nice -n 19"
@@ -146,9 +145,6 @@ SINGLE_UPDATE_OPTS=(${SINGLE_UPDATE_OPTS[@]})
 # local state file
 #LOCAL_SETTINGS_STATE="${LOCAL_SETTINGS_STATE}"
 
-# inotify log file
-#INOTIFY_WATCHLOG="${INOTIFY_WATCHLOG}"
-
 
 RSYNCRESTORECONFIG
 		. ${LOCAL_SETTINGS_CONFIG}
@@ -190,6 +186,9 @@ touch_state() {
 
 #  is rsync running?
 rsync_running() {
+	#ps -C rsync >/dev/null
+	#return $?
+
 	local status=$*
 
 	if [[ ! -z ${status} ]]; then
@@ -258,7 +257,11 @@ brsync() {
 		touch_target
 	fi
 	touch_state
-	rsync_running 0 
+	rsync_running 0
+
+	echo END RUNNING: ${RSYNC_RUNNING}
+	echo
+	echo '---------------------------'
 }
 
 # find new or changed files in SYNC_LOCAL_FOLDER
@@ -354,55 +357,35 @@ continuos_updates() {
 	done
 }
 
+# watch whether a new day started
+watch_for_new_day() {
+	while true; do
+		sleep 1200
+		if [[ `basename ${SYNC_SERVER_TARGET}` != `today` ]]; then
+			while rsync_running; do 
+				sleep 30
+			done
+			set_up_environment
+			brsync restore_delete
+		fi
+	done
+}
+
 # it watches local folder(s) for changes and runs sync_single
 # if a file/folder is created/changed/deleted/moved...
 watch_changes() {
-	[[ -e ${INOTIFY_WATCHLOG} ]] || touch ${INOTIFY_WATCHLOG}
-
 	killall inotifywait
-	local separator=:$RANDOM:
-	inotifywait -d -r --format "%e$separator%w%f" -e modify -e move -e create -e delete -e attrib -o "${INOTIFY_WATCHLOG}" ${SYNC_LOCAL_FOLDER}
+	inotifywait -m -r --format "%e %w%f" -e modify -e move -e create -e delete -e attrib ${SYNC_LOCAL_FOLDER} | while read event file; do
 
-	while inotifywait -e modify ${INOTIFY_WATCHLOG} >/dev/null 2>&1; do
-		local line1=$( tail -1 ${INOTIFY_WATCHLOG} )
-		local line2=$( tail -2 ${INOTIFY_WATCHLOG} | grep MOVED_FROM )
-
-		if echo $line1 | grep $separator >/dev/null ; then
-			# new day started
-			if [[ `basename ${SYNC_SERVER_TARGET}` != `today` ]]; then
-				set_up_environment
-				brsync restore_delete
-			fi
-
-			local file=${line1##*$separator}
-			local event=${line1%%$separator*}
-			event=${event%,*}
-			debug 2 "FOUND: $event - $file"
+		file=${file%*/}
+		event=${event%,*}
 			
-			if [[ $event == 'DELETE' ]]; then
-				file=$( remove_end_backslash ${file} )
-				file=${file%/*}
-				brsync single ${file} 
+		if [[ ${event} == 'DELETE' ]] || [[ ${event} == 'MOVED_FROM' ]]; then
+			file=${file%/*}
+		fi
 
-			elif [[ ${event} == 'ATTRIB' ]] || [[ ${event} == 'CREATE' ]] || [[ ${event} == 'MODIFY' ]] || [[ ${event} == 'MOVED_TO' ]]; then
-				# delete old location (moved_from)
-				if [[ ${event} == 'MOVED_TO' ]] && [[ ! -z ${line2} ]]; then
-					debug 2 "FOUND: MOVED_FROM - $file2"
-
-					local file2=${line2##*$separator}
-					file2=$( remove_end_backslash ${file} )
-					file2=${file%/*}
-					brsync single ${file2}
-				fi
-
-				if [[ -z ${file2} ]] || [[ ${file} != ${file2} ]]; then
-					brsync single $file
-				fi
-
-			else
-				warn "Unexpected inotifywait event: $event"
-			fi
-		fi	
+		debug 2 "FOUND: ${event} - ${file}"
+		brsync single ${file} 
 	done
 }
 
@@ -636,7 +619,10 @@ fi
 brsync backup
 
 # run updates from server every X seconds
-continuos_updates &
+#continuos_updates &
+
+# create new folder if new day started
+watch_for_new_day &
 
 # watch local folders for changes using inotifywait
 if [[ -x `which inotifywait 2>/dev/null` ]]; then
